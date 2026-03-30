@@ -1,0 +1,13 @@
+# Virtual environment
+.venv/
+
+# Packaging metadata (generated)
+geostt_correct.egg-info/
+
+# Python caches/bytecode (generated)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# CLI outputs (generated during runs)
+out*.txt

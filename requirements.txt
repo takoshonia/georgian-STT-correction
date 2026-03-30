@@ -1,0 +1,2 @@
+# Core (stdlib-only). Optional: requests if you prefer over urllib.
+# pip install -r requirements.txt

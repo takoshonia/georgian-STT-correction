@@ -11,3 +11,4 @@ __pycache__/
 
 # CLI outputs (generated during runs)
 out*.txt
+report*.json

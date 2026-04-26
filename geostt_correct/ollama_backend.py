@@ -14,11 +14,39 @@ Rules (must follow all):
 - Do NOT change Georgian grammar when the transcript is already valid. Many alternates are equally correct without audio (e.g. singular vs plural dative such as ბავშვს vs ბავშვებს). In those cases KEEP the transcript wording.
 - Do NOT change case endings (ობით/ით/ს/ზე/ში…) or word forms for “elegance” if the original word is already a plausible correct form in context.
 - Do NOT add final . ? ! or other punctuation unless the transcript already has it or you must fix an obvious punctuation ASR error.
-- If the text is too broken to correct safely, output the SAME text unchanged."""
+- If the text is too broken to correct safely, output the SAME text unchanged.
+- Do NOT change finite verb forms into adjectives/nouns (e.g., -ობენ → -იანი type drift). Keep predicate type.
+"""
+
+FEW_SHOT = """მაგალითები:
+შეცდომა: "მან გადაწყვიტა რომ წასულიყო სახლში და დედამ"
+გასწორება: "მან გადაწყვიტა რომ წასულიყო სახლში და დედამ"  ← არ შეცვლა, სწორია
+
+შეცდომა: "ის იყო ძალიან ბედნიერი დღეს რომ ნახა კარგი ამინდი ქუდში"
+გასწორება: "ის იყო ძალიან ბედნიერი დღეს რომ ნახა კარგი ამინდი ქუჩაში"
+
+შეცდომა: "კომპანია გამოაცხადა ახალი პროდუქტი წელსწელი"
+გასწორება: "კომპანიამ გამოაცხადა ახალი პროდუქტი წელს"
+
+შეცდომა: "ჟანეტა და თათია მეგობლები არიან, თუმცა ზოგჯე ჩხუბოპენ"
+გასწორება: "ჟანეტა და თათია მეგობრები არიან, თუმცა ზოგჯერ ჩხუბობენ"
+
+შეცდომა: "ნათია და ინგა საუკეთესო მეგობლები ალიან, მაგრამ ზოგჯერ ნათია ცუდათ იქცევა და ეგ ძალიან ჩუდია"
+გასწორება: "ნათია და ინგა საუკეთესო მეგობრები არიან, მაგრამ ზოგჯერ ნათია ცუდად იქცევა და ეგ ძალიან ცუდია"
+
+შეცდომა: "ნინოს ნაყინი და გურამის თუტიყუში მანქანამ გაიტანა"
+გასწორება: "ნინოს ნაყინი და გურამის თუთიყუში მანქანამ გაიტანა"
+
+შეცდომა: "ქეთი და გიორგი სკოლაში წავიდნენ და მერე სახლში მობრუნდა"
+გასწორება: "ქეთი და გიორგი სკოლაში წავიდნენ და მერე სახლში დაბრუნდნენ"
+
+"""
 
 USER_TEMPLATE = """ქვემოთ მოცემულია სპიჩ-ტუ-ტექსტის ტრანსკრიპტი. გაასწორე მხოლოდ ცხადი აკუსტიკური/ASR შეცდომები.
 
 მნიშვნელოვანი: თუ ორი ფორმა ქართულში თანაბრად დასაშვებია (მაგ. ბავშვს vs ბავშვებს) და წინადადება ორივე შემთხვევაში გრამატიკულია, დატოვე ტრანსკრიპტის ფორმა უცვლელად. არ შეცვალო ბრუნვა/რიცხვი „სტილისთვის“. არ დაამატო წერტილი ბოლოში, თუ იგი ტრანსკრიპტში არ იყო.
+
+{few_shot}
 
 ტექსტი:
 {chunk}"""
@@ -67,7 +95,7 @@ def correct_chunk(
     temperature: float,
     timeout_s: int,
 ) -> str:
-    prompt = USER_TEMPLATE.format(chunk=chunk.strip())
+    prompt = USER_TEMPLATE.format(few_shot=FEW_SHOT, chunk=chunk.strip())
     return ollama_generate(
         host=host,
         model=model,

@@ -10,14 +10,14 @@ class Settings:
     """Defaults tuned for weak STT + small local models."""
 
     ollama_host: str = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-    ollama_model: str = os.environ.get("OLLAMA_MODEL", "qwen2.5:1.5b")
+    ollama_model: str = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
     ollama_timeout_s: int = int(os.environ.get("OLLAMA_TIMEOUT", "300"))
-    temperature: float = float(os.environ.get("OLLAMA_TEMPERATURE", "0.1"))
+    temperature: float = float(os.environ.get("OLLAMA_TEMPERATURE", "0.0"))
     max_chunk_chars: int = int(os.environ.get("MAX_CHUNK_CHARS", "800"))
     sentence_overlap_chars: int = int(os.environ.get("SENTENCE_OVERLAP_CHARS", "0"))
     # Reject model output if too different from input (reduces hallucinated rewrites).
-    min_sequence_ratio: float = float(os.environ.get("MIN_SEQUENCE_RATIO", "0.55"))
-    max_relative_length: float = float(os.environ.get("MAX_RELATIVE_LENGTH", "1.55"))
+    min_sequence_ratio: float = float(os.environ.get("MIN_SEQUENCE_RATIO", "0.75"))
+    max_relative_length: float = float(os.environ.get("MAX_RELATIVE_LENGTH", "1.30"))
     # ganmarteba (or any) word list — see scripts/build_ganmarteba_lexicon.py
     use_lexicon: bool = True
     lexicon_path: str | None = None

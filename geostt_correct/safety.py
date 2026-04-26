@@ -74,6 +74,27 @@ def accept_correction(original: str, corrected: str, *, min_sequence_ratio: floa
     if len(ow) >= 6 and len(cw) > len(ow) + 4:
         return False, "many_extra_words"
 
+    # Guard: if only one token changed, but new token is suspiciously longer,
+    # prefer original (pre-LLM) token to avoid gibberish like "მოვა" -> "მოვიმოტ".
+    if len(ow) == len(cw):
+        diffs = [(a, b) for a, b in zip(ow, cw) if a != b]
+        if len(diffs) == 1:
+            a, b = diffs[0]
+            if len(a) <= 5 and len(b) >= len(a) + 2:
+                return False, "single_token_expansion"
+
+
+    # Hard rollback guard: if too many aligned tokens changed, it is likely a rewrite.
+    # We compare aligned tokens only (zip) to keep this deterministic and fast.
+    if ow:
+        aligned = min(len(ow), len(cw))
+        changed = sum(1 for a, b in zip(ow, cw) if a != b)
+        # Count extra unmatched tokens as changed too.
+        changed += abs(len(ow) - len(cw))
+        if aligned > 0 and (changed / max(len(ow), 1)) > 0.70:
+            return False, "too_many_tokens_changed"
+    
+
     if _is_ambiguous_single_token_swap(o_cmp, c_cmp):
         return False, "ambiguous_equivalent_morphology"
 

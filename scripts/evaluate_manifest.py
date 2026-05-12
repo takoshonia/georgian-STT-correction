@@ -10,7 +10,7 @@ from pathlib import Path
 from geostt_correct.pipeline import correct_document
 
 try:
-    from openpyxl import Workbook, load_workbook
+    from openpyxl import Workbook
 except ModuleNotFoundError as exc:  # pragma: no cover
     raise SystemExit(
         "Missing dependency: openpyxl. Install with: pip install openpyxl"
@@ -76,53 +76,87 @@ def _cer(reference: str, hypothesis: str) -> float:
     return _levenshtein_distance(ref_chars, hyp_chars) / len(ref_chars)
 
 
-def _iter_rows(ws, col_index_map: dict[str, int]):
-    for row_idx, row in enumerate(
-        ws.iter_rows(min_row=2, values_only=True),
-        start=2,
-    ):
-        yield row_idx, row, col_index_map
+def _load_pairs(
+    input_json: Path,
+    input_field: str,
+    reference_field: str,
+    row_field: str,
+) -> list[tuple[int, str, str]]:
+    """Load (row_index, stt_input, reference_text) tuples from a JSON list.
+
+    Accepts either a JSON array of objects, or an object containing such an
+    array under common keys like "pairs", "data", "items", "rows".
+    """
+    raw = json.loads(input_json.read_text(encoding="utf-8"))
+
+    if isinstance(raw, dict):
+        for key in ("pairs", "data", "items", "rows"):
+            if key in raw and isinstance(raw[key], list):
+                raw = raw[key]
+                break
+        else:
+            raise ValueError(
+                f"Top-level JSON object must contain a list under one of: "
+                f"pairs, data, items, rows. Got keys: {list(raw.keys())}"
+            )
+
+    if not isinstance(raw, list):
+        raise ValueError(
+            f"Expected a JSON list of pairs, got {type(raw).__name__}."
+        )
+
+    pairs: list[tuple[int, str, str]] = []
+    for fallback_idx, entry in enumerate(raw, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"Entry #{fallback_idx} is not a JSON object: {entry!r}"
+            )
+        if input_field not in entry:
+            raise ValueError(
+                f"Entry #{fallback_idx} missing input field "
+                f"'{input_field}'. Available keys: {list(entry.keys())}"
+            )
+        if reference_field not in entry:
+            raise ValueError(
+                f"Entry #{fallback_idx} missing reference field "
+                f"'{reference_field}'. Available keys: {list(entry.keys())}"
+            )
+        row_index = entry.get(row_field, fallback_idx)
+        try:
+            row_index_int = int(row_index)
+        except (TypeError, ValueError):
+            row_index_int = fallback_idx
+        pairs.append(
+            (
+                row_index_int,
+                _normalize_text(entry[input_field]),
+                _normalize_text(entry[reference_field]),
+            )
+        )
+    return pairs
 
 
 def run_evaluation(
-    input_xlsx: Path,
+    input_json: Path,
     output_xlsx: Path,
     summary_json: Path,
-    input_col: str,
-    reference_col: str,
+    input_field: str,
+    reference_field: str,
+    row_field: str,
     max_rows: int | None,
     progress_every: int,
 ) -> dict:
-    wb = load_workbook(input_xlsx, data_only=True, read_only=True)
-    ws = wb.active
-
-    headers = [str(x).strip() if x is not None else "" for x in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
-    header_to_idx = {h: i for i, h in enumerate(headers)}
-
-    if input_col not in header_to_idx:
-        raise ValueError(f"Input column '{input_col}' not found. Found headers: {headers}")
-    if reference_col not in header_to_idx:
-        raise ValueError(f"Reference column '{reference_col}' not found. Found headers: {headers}")
-
-    col_index_map = {
-        "input_col": header_to_idx[input_col],
-        "reference_col": header_to_idx[reference_col],
-        "folder_col": header_to_idx.get("folder", -1),
-        "filename_col": header_to_idx.get("filename", -1),
-        "extension_col": header_to_idx.get("extension", -1),
-    }
+    pairs = _load_pairs(input_json, input_field, reference_field, row_field)
 
     metrics: list[RowMetrics] = []
     processed = 0
     started_at = time.perf_counter()
     running_total_row_time = 0.0
 
-    for row_idx, row, idx_map in _iter_rows(ws, col_index_map):
+    for row_idx, stt_input, reference in pairs:
         if max_rows is not None and processed >= max_rows:
             break
 
-        stt_input = _normalize_text(row[idx_map["input_col"]])
-        reference = _normalize_text(row[idx_map["reference_col"]])
         if not stt_input and not reference:
             continue
 
@@ -156,7 +190,7 @@ def run_evaluation(
             avg_tps = statistics.fmean(x.tokens_per_second for x in metrics)
             print(
                 (
-                    f"[progress] processed={processed}"
+                    f"[progress] processed={processed}/{len(pairs)}"
                     f" row_index={row_idx}"
                     f" last_row_time_s={elapsed:.3f}"
                     f" avg_row_time_s={avg_row_time:.3f}"
@@ -200,7 +234,7 @@ def run_evaluation(
 
     if metrics:
         summary = {
-            "input_file": str(input_xlsx),
+            "input_file": str(input_json),
             "output_file": str(output_xlsx),
             "rows_processed": len(metrics),
             "average_wer": statistics.fmean(x.wer for x in metrics),
@@ -212,7 +246,7 @@ def run_evaluation(
         }
     else:
         summary = {
-            "input_file": str(input_xlsx),
+            "input_file": str(input_json),
             "output_file": str(output_xlsx),
             "rows_processed": 0,
         }
@@ -223,13 +257,13 @@ def run_evaluation(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Batch-evaluate STT correction on an Excel manifest."
+        description="Batch-evaluate STT correction on a JSON pair file."
     )
     parser.add_argument(
-        "--input-xlsx",
+        "--input-json",
         type=Path,
-        required=True,
-        help="Path to source dataset XLSX.",
+        default=Path("sample_pairs.json"),
+        help="Path to source JSON file with stt/reference pairs.",
     )
     parser.add_argument(
         "--output-xlsx",
@@ -244,16 +278,22 @@ def parse_args() -> argparse.Namespace:
         help="Path to summary JSON with aggregate metrics.",
     )
     parser.add_argument(
-        "--input-col",
+        "--input-field",
         type=str,
-        default="STT1_Text",
-        help="Column name used as model input.",
+        default="stt1_text",
+        help="JSON field used as model input.",
     )
     parser.add_argument(
-        "--reference-col",
+        "--reference-field",
         type=str,
-        default="Text",
-        help="Column name used as ground-truth reference.",
+        default="text",
+        help="JSON field used as ground-truth reference.",
+    )
+    parser.add_argument(
+        "--row-field",
+        type=str,
+        default="row",
+        help="JSON field that stores the original row index (optional).",
     )
     parser.add_argument(
         "--max-rows",
@@ -273,11 +313,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     summary = run_evaluation(
-        input_xlsx=args.input_xlsx,
+        input_json=args.input_json,
         output_xlsx=args.output_xlsx,
         summary_json=args.summary_json,
-        input_col=args.input_col,
-        reference_col=args.reference_col,
+        input_field=args.input_field,
+        reference_field=args.reference_field,
+        row_field=args.row_field,
         max_rows=args.max_rows,
         progress_every=args.progress_every,
     )

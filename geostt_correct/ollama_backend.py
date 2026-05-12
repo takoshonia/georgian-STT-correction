@@ -4,6 +4,9 @@ import json
 import urllib.error
 import urllib.request
 
+# Dropped from SYSTEM_PROMPT (covered by remaining rules; add back if quality drops):
+#   - "Do NOT change case endings (ობით/ით/ს/ზე/ში…)..." -- redundant with the grammar-preservation rule.
+#   - "Do NOT change finite verb forms into adjectives/nouns (e.g., -ობენ → -იანი type drift)." -- rare edge case, subsumed by "do not paraphrase".
 SYSTEM_PROMPT = """You fix Georgian speech-to-text output.
 
 Rules (must follow all):
@@ -12,39 +15,46 @@ Rules (must follow all):
 - Do NOT change meaning. Do NOT add new facts, names, or clauses.
 - Do NOT rewrite style. Do NOT paraphrase. Do NOT substitute synonyms.
 - Do NOT change Georgian grammar when the transcript is already valid. Many alternates are equally correct without audio (e.g. singular vs plural dative such as ბავშვს vs ბავშვებს). In those cases KEEP the transcript wording.
-- Do NOT change case endings (ობით/ით/ს/ზე/ში…) or word forms for “elegance” if the original word is already a plausible correct form in context.
 - Do NOT add final . ? ! or other punctuation unless the transcript already has it or you must fix an obvious punctuation ASR error.
 - If the text is too broken to correct safely, output the SAME text unchanged.
-- Do NOT change finite verb forms into adjectives/nouns (e.g., -ობენ → -იანი type drift). Keep predicate type.
 """
 
-FEW_SHOT = """მაგალითები:
-შეცდომა: "მან გადაწყვიტა რომ წასულიყო სახლში და დედამ"
-გასწორება: "მან გადაწყვიტა რომ წასულიყო სახლში და დედამ"  ← არ შეცვლა, სწორია
+# Few-shot examples. Comment/uncomment entries to A/B test prompt size vs. quality.
+# Each extra example adds ~120-180 chars (~60-90 tokens) to every Ollama call.
+_FEW_SHOT_EXAMPLES: list[str] = [
+    # 1. Preserve correct transcript (model's #1 failure: over-correcting).
+    'შეცდომა: "მან გადაწყვიტა რომ წასულიყო სახლში და დედამ"\n'
+    'გასწორება: "მან გადაწყვიტა რომ წასულიყო სახლში და დედამ"  ← არ შეცვლა, სწორია',
 
-შეცდომა: "ის იყო ძალიან ბედნიერი დღეს რომ ნახა კარგი ამინდი ქუდში"
-გასწორება: "ის იყო ძალიან ბედნიერი დღეს რომ ნახა კარგი ამინდი ქუჩაში"
+    # 2. Single-word phonetic swap (most common ASR error class).
+    'შეცდომა: "ის იყო ძალიან ბედნიერი დღეს რომ ნახა კარგი ამინდი ქუდში"\n'
+    'გასწორება: "ის იყო ძალიან ბედნიერი დღეს რომ ნახა კარგი ამინდი ქუჩაში"',
 
-შეცდომა: "კომპანია გამოაცხადა ახალი პროდუქტი წელსწელი"
-გასწორება: "კომპანიამ გამოაცხადა ახალი პროდუქტი წელს"
+    # 3. Case-ending fix + garbage-tail removal (two common artifacts).
+    'შეცდომა: "კომპანია გამოაცხადა ახალი პროდუქტი წელსწელი"\n'
+    'გასწორება: "კომპანიამ გამოაცხადა ახალი პროდუქტი წელს"',
 
-შეცდომა: "ჟანეტა და თათია მეგობლები არიან, თუმცა ზოგჯე ჩხუბოპენ"
-გასწორება: "ჟანეტა და თათია მეგობრები არიან, თუმცა ზოგჯერ ჩხუბობენ"
+    # --- Commented out to shrink prompt; re-enable any line if quality drops. ---
+    # 4. Multi-token cleanup in one sentence (overlaps with #5).
+    # 'შეცდომა: "ჟანეტა და თათია მეგობლები არიან, თუმცა ზოგჯე ჩხუბოპენ"\n'
+    # 'გასწორება: "ჟანეტა და თათია მეგობრები არიან, თუმცა ზოგჯერ ჩხუბობენ"',
 
-შეცდომა: "ნათია და ინგა საუკეთესო მეგობლები ალიან, მაგრამ ზოგჯერ ნათია ცუდათ იქცევა და ეგ ძალიან ჩუდია"
-გასწორება: "ნათია და ინგა საუკეთესო მეგობრები არიან, მაგრამ ზოგჯერ ნათია ცუდად იქცევა და ეგ ძალიან ცუდია"
+    # 5. Multi-typo cleanup (overlaps with #4).
+    # 'შეცდომა: "ნათია და ინგა საუკეთესო მეგობლები ალიან, მაგრამ ზოგჯერ ნათია ცუდათ იქცევა და ეგ ძალიან ჩუდია"\n'
+    # 'გასწორება: "ნათია და ინგა საუკეთესო მეგობრები არიან, მაგრამ ზოგჯერ ნათია ცუდად იქცევა და ეგ ძალიან ცუდია"',
 
-შეცდომა: "ნინოს ნაყინი და გურამის თუტიყუში მანქანამ გაიტანა"
-გასწორება: "ნინოს ნაყინი და გურამის თუთიყუში მანქანამ გაიტანა"
+    # 6. Single-letter swap (same spirit as #2).
+    # 'შეცდომა: "ნინოს ნაყინი და გურამის თუტიყუში მანქანამ გაიტანა"\n'
+    # 'გასწორება: "ნინოს ნაყინი და გურამის თუთიყუში მანქანამ გაიტანა"',
 
-შეცდომა: "ქეთი და გიორგი სკოლაში წავიდნენ და მერე სახლში მობრუნდა"
-გასწორება: "ქეთი და გიორგი სკოლაში წავიდნენ და მერე სახლში დაბრუნდნენ"
+    # 7. Verb agreement (rare/specific).
+    # 'შეცდომა: "ქეთი და გიორგი სკოლაში წავიდნენ და მერე სახლში მობრუნდა"\n'
+    # 'გასწორება: "ქეთი და გიორგი სკოლაში წავიდნენ და მერე სახლში დაბრუნდნენ"',
+]
 
-"""
+FEW_SHOT = "მაგალითები:\n" + "\n\n".join(_FEW_SHOT_EXAMPLES) + "\n"
 
-USER_TEMPLATE = """ქვემოთ მოცემულია სპიჩ-ტუ-ტექსტის ტრანსკრიპტი. გაასწორე მხოლოდ ცხადი აკუსტიკური/ASR შეცდომები.
-
-მნიშვნელოვანი: თუ ორი ფორმა ქართულში თანაბრად დასაშვებია (მაგ. ბავშვს vs ბავშვებს) და წინადადება ორივე შემთხვევაში გრამატიკულია, დატოვე ტრანსკრიპტის ფორმა უცვლელად. არ შეცვალო ბრუნვა/რიცხვი „სტილისთვის“. არ დაამატო წერტილი ბოლოში, თუ იგი ტრანსკრიპტში არ იყო.
+USER_TEMPLATE = """ქართული ASR ტრანსკრიპტი — გაასწორე მხოლოდ ცხადი აკუსტიკური შეცდომები. თუ ფორმა უკვე გრამატიკულია, დატოვე უცვლელად.
 
 {few_shot}
 
